@@ -130,6 +130,7 @@ defmodule ReqLLM.Providers.OpenRouterTest do
       updated_request = OpenRouter.encode_body(mock_request)
 
       assert is_binary(updated_request.body)
+      assert_no_duplicate_json_keys(updated_request.body)
       decoded = Jason.decode!(updated_request.body)
 
       assert decoded["model"] == "openai/gpt-4"
@@ -167,6 +168,7 @@ defmodule ReqLLM.Providers.OpenRouterTest do
       }
 
       updated_request = OpenRouter.encode_body(mock_request)
+      assert_no_duplicate_json_keys(updated_request.body)
       decoded = Jason.decode!(updated_request.body)
 
       assert is_list(decoded["tools"])
@@ -204,6 +206,7 @@ defmodule ReqLLM.Providers.OpenRouterTest do
       }
 
       updated_request = OpenRouter.encode_body(mock_request)
+      assert_no_duplicate_json_keys(updated_request.body)
       decoded = Jason.decode!(updated_request.body)
 
       assert is_list(decoded["tools"])
@@ -212,6 +215,83 @@ defmodule ReqLLM.Providers.OpenRouterTest do
                "type" => "function",
                "function" => %{"name" => "specific_tool"}
              }
+    end
+
+    test "encode_body with streaming includes stream_options without duplicates" do
+      {:ok, model} = ReqLLM.model("openrouter:openai/gpt-4")
+      context = context_fixture()
+
+      mock_request = %Req.Request{
+        options: [
+          context: context,
+          model: model.model,
+          stream: true
+        ]
+      }
+
+      updated_request = OpenRouter.encode_body(mock_request)
+      assert_no_duplicate_json_keys(updated_request.body)
+      decoded = Jason.decode!(updated_request.body)
+
+      assert decoded["stream"] == true
+      assert decoded["stream_options"] == %{"include_usage" => true}
+    end
+
+    test "encode_body with openrouter_usage option" do
+      {:ok, model} = ReqLLM.model("openrouter:openai/gpt-4")
+      context = context_fixture()
+
+      mock_request = %Req.Request{
+        options: [
+          context: context,
+          model: model.model,
+          stream: false,
+          openrouter_usage: %{include: true}
+        ]
+      }
+
+      updated_request = OpenRouter.encode_body(mock_request)
+      decoded = Jason.decode!(updated_request.body)
+
+      assert decoded["usage"] == %{"include" => true}
+    end
+
+    test "encode_body with openrouter_plugins option" do
+      {:ok, model} = ReqLLM.model("openrouter:openai/gpt-4")
+      context = context_fixture()
+
+      mock_request = %Req.Request{
+        options: [
+          context: context,
+          model: model.model,
+          stream: false,
+          openrouter_plugins: [%{id: "web"}]
+        ]
+      }
+
+      updated_request = OpenRouter.encode_body(mock_request)
+      decoded = Jason.decode!(updated_request.body)
+
+      assert decoded["plugins"] == [%{"id" => "web"}]
+    end
+
+    test "encode_body with multiple openrouter_plugins" do
+      {:ok, model} = ReqLLM.model("openrouter:openai/gpt-4")
+      context = context_fixture()
+
+      mock_request = %Req.Request{
+        options: [
+          context: context,
+          model: model.model,
+          stream: false,
+          openrouter_plugins: [%{id: "web"}, %{id: "code"}]
+        ]
+      }
+
+      updated_request = OpenRouter.encode_body(mock_request)
+      decoded = Jason.decode!(updated_request.body)
+
+      assert decoded["plugins"] == [%{"id" => "web"}, %{"id" => "code"}]
     end
 
     test "encode_body with response_format" do
@@ -333,6 +413,84 @@ defmodule ReqLLM.Providers.OpenRouterTest do
       # Verify context advancement (original + assistant)
       assert length(response.context.messages) == 3
       assert List.last(response.context.messages).role == :assistant
+    end
+
+    test "prepare_request for :object with openrouter_structured_output_mode: :json_schema uses native schema" do
+      {:ok, model} = ReqLLM.model("openrouter:openai/gpt-4")
+      context = context_fixture()
+      {:ok, schema} = ReqLLM.Schema.compile(name: [type: :string])
+
+      opts = [
+        compiled_schema: schema,
+        provider_options: [openrouter_structured_output_mode: :json_schema]
+      ]
+
+      {:ok, request} = OpenRouter.prepare_request(:object, model, context, opts)
+
+      assert %{
+               type: "json_schema",
+               json_schema: %{
+                 strict: true,
+                 name: "structured_output",
+                 schema: _
+               }
+             } = request.options[:response_format]
+
+      refute Map.has_key?(request.options, :tools)
+      refute Map.has_key?(request.options, :tool_choice)
+      assert request.options[:max_tokens] == 4096
+    end
+
+    test "prepare_request for :object with json_schema mode respects custom max_tokens" do
+      {:ok, model} = ReqLLM.model("openrouter:openai/gpt-4")
+      context = context_fixture()
+      {:ok, schema} = ReqLLM.Schema.compile(name: [type: :string])
+
+      opts = [
+        compiled_schema: schema,
+        max_tokens: 8192,
+        provider_options: [openrouter_structured_output_mode: :json_schema]
+      ]
+
+      {:ok, request} = OpenRouter.prepare_request(:object, model, context, opts)
+
+      assert request.options[:max_tokens] == 8192
+    end
+
+    test "prepare_request for :object with json_schema mode enforces minimum max_tokens" do
+      {:ok, model} = ReqLLM.model("openrouter:openai/gpt-4")
+      context = context_fixture()
+      {:ok, schema} = ReqLLM.Schema.compile(name: [type: :string])
+
+      opts = [
+        compiled_schema: schema,
+        max_tokens: 50,
+        provider_options: [openrouter_structured_output_mode: :json_schema]
+      ]
+
+      {:ok, request} = OpenRouter.prepare_request(:object, model, context, opts)
+
+      assert request.options[:max_tokens] == 200
+    end
+
+    test "prepare_request for :object falls back to tools when mode is not :json_schema" do
+      {:ok, model} = ReqLLM.model("openrouter:openai/gpt-4")
+      context = context_fixture()
+      {:ok, schema} = ReqLLM.Schema.compile(name: [type: :string])
+
+      opts = [compiled_schema: schema]
+
+      {:ok, request} = OpenRouter.prepare_request(:object, model, context, opts)
+
+      assert Map.has_key?(request.options, :tools)
+
+      assert request.options[:tool_choice] == %{
+               type: "function",
+               function: %{name: "structured_output"}
+             }
+
+      refute Map.has_key?(request.options, :response_format)
+      assert request.options[:max_tokens] == 4096
     end
 
     test "decode_response handles streaming responses" do

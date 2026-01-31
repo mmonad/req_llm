@@ -7,8 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-01-30
+
 ### Added
 
+- **Reasoning cost breakdown** with `reasoning_cost` field in cost calculations (#394)
+- **OpenRouter enhancements** (#393, #374)
+  - `openrouter_usage` and `openrouter_plugins` provider options
+  - Native JSON schema structured output support
+- **Google URL context** provider option for grounding (#392)
+- **Google auth header** option for streaming requests (#382)
+- **Cohere Embeddings on Bedrock** support (#365)
+- **Structured and multimodal tool outputs** (#357)
+- **OpenAI strict mode** for JSON schema validation (#368)
+- **OpenAI verbosity** support for reasoning models (#354)
+- **Comprehensive usage and billing infrastructure** (#371)
+- **Ollama usage guide** documentation (#387)
+- **Model base_url override** in model configuration (#366)
 - **Anthropic web search tool support** for real-time web content access
   - `web_search` provider option enables Claude to search the web during conversations
   - Configurable options: `max_uses`, `allowed_domains`, `blocked_domains`, `user_location`
@@ -68,8 +83,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Implemented in AWS Bedrock, Google, and Google Vertex AI providers
   - Enables comprehensive test coverage without requiring all developers to configure cloud credentials
 
-### Enhanced
+### Changed
 
+- **Zoi schema refactor** for data structures, replacing TypedStruct (#376)
 - **AWS Event Stream parser documentation** clarifying Bedrock specialization
   - Explains performance rationale for single-pass parsing and header specialization
   - Documents non-goals (S3 Select, Transcribe, Kinesis incompatibility)
@@ -79,6 +95,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Image-only attachments validation** for OpenAI and xAI (#389)
+- **translate_options changes** now preserved in provider_options (#381)
+- **StreamServer termination** handled gracefully in FinchClient (#379)
+- **Anthropic schema constraints** stripped when unsupported (#378)
+- **api_key added to internal keys** preventing leakage (#355)
 - **Test helper `tool_budget_for/1` pattern match regression** from LLMDB integration
   - Fixed pattern match to use `{:ok, model}` instead of obsolete `{:ok, {provider, id, model}}`
   - Fixed field name from `model.limit` to `model.limits`
@@ -571,6 +592,7 @@ This is the first stable 1.0 release of ReqLLM, marking production readiness wit
 - Quality tooling with Dialyzer, Credo, and formatter
 - LiveFixture testing framework for API mocking
 
+[1.4.0]: https://github.com/agentjido/req_llm/releases/tag/v1.4.0
 [1.0.0]: https://github.com/agentjido/req_llm/releases/tag/v1.0.0
 [1.0.0-rc.8]: https://github.com/agentjido/req_llm/releases/tag/v1.0.0-rc.8
 [1.0.0-rc.7]: https://github.com/agentjido/req_llm/releases/tag/v1.0.0-rc.7

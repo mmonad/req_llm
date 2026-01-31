@@ -122,6 +122,41 @@ defmodule Provider.OpenAI.ResponsesAPIUnitTest do
       assert body["tool_choice"] == "required"
     end
 
+    test "encodes structured tool outputs from context metadata" do
+      tool_call = %ReqLLM.ToolCall{
+        id: "call_1",
+        type: "function",
+        function: %{name: "get_weather", arguments: ~s({"location":"SF"})}
+      }
+
+      assistant_msg = %ReqLLM.Message{
+        role: :assistant,
+        content: [],
+        tool_calls: [tool_call]
+      }
+
+      tool_result =
+        ReqLLM.Context.tool_result_message(
+          "get_weather",
+          "call_1",
+          %ReqLLM.ToolResult{output: %{temp: 72}}
+        )
+
+      context = %ReqLLM.Context{messages: [assistant_msg, tool_result]}
+      request = build_request(context: context)
+
+      encoded = ResponsesAPI.encode_body(request)
+      body = Jason.decode!(encoded.body)
+
+      tool_output =
+        Enum.find(body["input"], fn item ->
+          item["type"] == "function_call_output"
+        end)
+
+      assert tool_output["call_id"] == "call_1"
+      assert Jason.decode!(tool_output["output"]) == %{"temp" => 72}
+    end
+
     test "encodes specific tool choice with atom keys" do
       request =
         build_request(tool_choice: %{type: "function", function: %{name: "get_weather"}})
@@ -307,6 +342,60 @@ defmodule Provider.OpenAI.ResponsesAPIUnitTest do
       assert body["text"]["format"]["name"] == "search_schema"
       assert body["text"]["format"]["strict"] == true
       assert body["text"]["format"]["schema"] == json_schema
+    end
+
+    test "encodes verbosity when provided as atom" do
+      request = build_request(provider_options: [verbosity: :low])
+
+      encoded = ResponsesAPI.encode_body(request)
+      body = Jason.decode!(encoded.body)
+
+      assert body["text"]["verbosity"] == "low"
+    end
+
+    test "encodes verbosity when provided as string" do
+      request = build_request(provider_options: [verbosity: "high"])
+
+      encoded = ResponsesAPI.encode_body(request)
+      body = Jason.decode!(encoded.body)
+
+      assert body["text"]["verbosity"] == "high"
+    end
+
+    test "omits text field when no verbosity or response_format" do
+      request = build_request(provider_options: [])
+
+      encoded = ResponsesAPI.encode_body(request)
+      body = Jason.decode!(encoded.body)
+
+      refute Map.has_key?(body, "text")
+    end
+
+    test "encodes verbosity alongside response_format in text object" do
+      json_schema = %{
+        "type" => "object",
+        "properties" => %{"name" => %{"type" => "string"}},
+        "required" => ["name"]
+      }
+
+      response_format = %{
+        type: "json_schema",
+        json_schema: %{
+          name: "test_schema",
+          strict: true,
+          schema: json_schema
+        }
+      }
+
+      request =
+        build_request(provider_options: [response_format: response_format, verbosity: :medium])
+
+      encoded = ResponsesAPI.encode_body(request)
+      body = Jason.decode!(encoded.body)
+
+      assert body["text"]["format"]["type"] == "json_schema"
+      assert body["text"]["format"]["name"] == "test_schema"
+      assert body["text"]["verbosity"] == "medium"
     end
   end
 
