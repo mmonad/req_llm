@@ -524,7 +524,8 @@ defmodule ReqLLM.Providers.OpenAI.ResponsesAPI do
               {input_acc, tool_acc, reasoning_acc ++ new_reasoning}
             else
               if msg.tool_calls != nil and msg.tool_calls != [] do
-                {input_acc, tool_acc, reasoning_acc ++ new_reasoning}
+                function_calls = encode_tool_calls_as_function_calls(msg.tool_calls)
+                {input_acc ++ function_calls, tool_acc, reasoning_acc ++ new_reasoning}
               else
                 {input_acc ++ [%{"role" => "assistant", "content" => content}], tool_acc,
                  reasoning_acc ++ new_reasoning}
@@ -601,7 +602,9 @@ defmodule ReqLLM.Providers.OpenAI.ResponsesAPI do
       |> maybe_put_string("text", text_format)
 
     if previous_response_id do
-      Map.put(body, "previous_response_id", previous_response_id)
+      body
+      |> Map.put("previous_response_id", previous_response_id)
+      |> Map.put("store", true)
     else
       body
     end
@@ -892,6 +895,17 @@ defmodule ReqLLM.Providers.OpenAI.ResponsesAPI do
   end
 
   defp encode_tool_outputs(_), do: []
+
+  defp encode_tool_calls_as_function_calls(tool_calls) do
+    Enum.map(tool_calls, fn tc ->
+      %{
+        "type" => "function_call",
+        "call_id" => tc.id,
+        "name" => ReqLLM.ToolCall.name(tc),
+        "arguments" => ReqLLM.ToolCall.args_json(tc)
+      }
+    end)
+  end
 
   defp encode_tools_if_any(request) do
     case request.options[:tools] do
