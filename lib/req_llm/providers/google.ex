@@ -1524,7 +1524,7 @@ defmodule ReqLLM.Providers.Google do
   end
 
   defp extract_tool_calls(parts) do
-    for %{"functionCall" => %{} = call} <- parts do
+    for %{"functionCall" => %{} = call} = part <- parts do
       call_id = Map.get(call, "id", "tool_call_#{System.unique_integer([:positive])}")
 
       encoded_args =
@@ -1532,7 +1532,7 @@ defmodule ReqLLM.Providers.Google do
         |> Map.get("args", %{})
         |> Jason.encode!()
 
-      %{
+      base = %{
         "id" => call_id,
         "type" => "function",
         "function" => %{
@@ -1540,6 +1540,11 @@ defmodule ReqLLM.Providers.Google do
           "arguments" => encoded_args
         }
       }
+
+      case part["thoughtSignature"] do
+        nil -> base
+        sig -> Map.put(base, "thought_signature", sig)
+      end
     end
   end
 
@@ -1894,26 +1899,46 @@ defmodule ReqLLM.Providers.Google do
 
   defp convert_tool_call_to_function_call(%ReqLLM.ToolCall{
          type: "function",
-         function: %{name: name, arguments: args}
+         function: %{name: name, arguments: args},
+         provider_meta: provider_meta
        }) do
-    %{functionCall: %{name: name, args: Jason.decode!(args)}}
+    Logger.debug("[THOUGHT_SIG_DEBUG] ToolCall struct: name=#{name} provider_meta=#{inspect(provider_meta)}")
+    base = %{functionCall: %{name: name, args: Jason.decode!(args)}}
+    maybe_attach_thought_signature(base, provider_meta)
   end
 
   defp convert_tool_call_to_function_call(%{
          "type" => "function",
          "function" => %{"name" => name, "arguments" => args}
-       }) do
-    %{functionCall: %{name: name, args: Jason.decode!(args)}}
+       } = tc) do
+    Logger.debug("[THOUGHT_SIG_DEBUG] String-key map: name=#{name} keys=#{inspect(Map.keys(tc))}")
+    base = %{functionCall: %{name: name, args: Jason.decode!(args)}}
+    maybe_attach_thought_signature(base, tc)
   end
 
   defp convert_tool_call_to_function_call(%{
          type: "function",
          function: %{name: name, arguments: args}
-       }) do
-    %{functionCall: %{name: name, args: Jason.decode!(args)}}
+       } = tc) do
+    Logger.debug("[THOUGHT_SIG_DEBUG] Atom-key map: name=#{name} keys=#{inspect(Map.keys(tc))}")
+    base = %{functionCall: %{name: name, args: Jason.decode!(args)}}
+    maybe_attach_thought_signature(base, tc)
   end
 
-  defp convert_tool_call_to_function_call(_), do: nil
+  defp convert_tool_call_to_function_call(other) do
+    Logger.debug("[THOUGHT_SIG_DEBUG] Catchall: #{inspect(other)}")
+    nil
+  end
+
+  defp maybe_attach_thought_signature(part, %{thought_signature: sig}) when is_binary(sig) do
+    Map.put(part, :thoughtSignature, sig)
+  end
+
+  defp maybe_attach_thought_signature(part, %{"thought_signature" => sig}) when is_binary(sig) do
+    Map.put(part, :thoughtSignature, sig)
+  end
+
+  defp maybe_attach_thought_signature(part, _), do: part
 
   defp extract_content_text(content) when is_binary(content), do: content
 
@@ -2194,7 +2219,15 @@ defmodule ReqLLM.Providers.Google do
           name = call["name"]
           args = call["args"] || %{}
           call_id = Map.get(call, "id", "call_#{System.unique_integer([:positive])}")
-          [ReqLLM.StreamChunk.tool_call(name, args, %{id: call_id})]
+          meta = %{id: call_id}
+
+          meta =
+            case part["thoughtSignature"] do
+              nil -> meta
+              sig -> Map.put(meta, :thought_signature, sig)
+            end
+
+          [ReqLLM.StreamChunk.tool_call(name, args, meta)]
 
         true ->
           []

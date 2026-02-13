@@ -731,22 +731,22 @@ defmodule ReqLLM.Context do
 
   defp normalize_tool_call(%{name: name, arguments: input} = m) do
     id = Map.get(m, :id, generate_id())
-    ToolCall.new(id, name, json(input))
+    ToolCall.new(id, name, json(input), extract_provider_meta(m))
   end
 
   defp normalize_tool_call(%{name: name, input: input} = m) do
     id = Map.get(m, :id, generate_id())
-    ToolCall.new(id, name, json(input))
+    ToolCall.new(id, name, json(input), extract_provider_meta(m))
   end
 
   defp normalize_tool_call(%{"name" => name, "arguments" => input} = m) do
     id = Map.get(m, "id") || generate_id()
-    ToolCall.new(id, name, json(input))
+    ToolCall.new(id, name, json(input), extract_provider_meta(m))
   end
 
   defp normalize_tool_call(%{"name" => name, "input" => input} = m) do
     id = Map.get(m, "id") || generate_id()
-    ToolCall.new(id, name, json(input))
+    ToolCall.new(id, name, json(input), extract_provider_meta(m))
   end
 
   defp normalize_tool_call(other) do
@@ -755,6 +755,15 @@ defmodule ReqLLM.Context do
 
   defp json(v) when is_binary(v), do: v
   defp json(v), do: Jason.encode!(v)
+
+  defp extract_provider_meta(%{provider_meta: meta}) when is_map(meta), do: meta
+
+  defp extract_provider_meta(tc) do
+    case Map.get(tc, :thought_signature) || Map.get(tc, "thought_signature") do
+      nil -> %{}
+      sig -> %{thought_signature: sig}
+    end
+  end
 
   defp to_context(%__MODULE__{} = context, _convert_loose?), do: {:ok, context}
 

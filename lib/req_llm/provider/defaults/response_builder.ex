@@ -142,6 +142,12 @@ defmodule ReqLLM.Provider.Defaults.ResponseBuilder do
       index: Map.get(chunk.metadata, :index, 0)
     }
 
+    tool_call =
+      case Map.get(chunk.metadata, :thought_signature) do
+        nil -> tool_call
+        sig -> Map.put(tool_call, :thought_signature, sig)
+      end
+
     %{acc | tool_calls: [tool_call | acc.tool_calls]}
   end
 
@@ -221,24 +227,33 @@ defmodule ReqLLM.Provider.Defaults.ResponseBuilder do
 
   defp normalize_tool_call(%ToolCall{} = call), do: call
 
-  defp normalize_tool_call(%{id: id, name: name, arguments: args}) do
-    ToolCall.new(id, name, encode_tool_args(args))
+  defp normalize_tool_call(%{id: id, name: name, arguments: args} = tc) do
+    ToolCall.new(id, name, encode_tool_args(args), extract_provider_meta(tc))
   end
 
-  defp normalize_tool_call(%{"id" => id, "name" => name, "arguments" => args}) do
-    ToolCall.new(id, name, encode_tool_args(args))
+  defp normalize_tool_call(%{"id" => id, "name" => name, "arguments" => args} = tc) do
+    ToolCall.new(id, name, encode_tool_args(args), extract_provider_meta(tc))
   end
 
   defp normalize_tool_call(other) when is_map(other) do
     id = Map.get(other, :id) || Map.get(other, "id")
     name = Map.get(other, :name) || Map.get(other, "name")
     args = Map.get(other, :arguments) || Map.get(other, "arguments")
-    ToolCall.new(id, name, encode_tool_args(args))
+    ToolCall.new(id, name, encode_tool_args(args), extract_provider_meta(other))
   end
 
   defp encode_tool_args(args) when is_binary(args), do: args
   defp encode_tool_args(nil), do: Jason.encode!(%{})
   defp encode_tool_args(args), do: Jason.encode!(args)
+
+  defp extract_provider_meta(%{provider_meta: meta}) when is_map(meta), do: meta
+
+  defp extract_provider_meta(tc) do
+    case Map.get(tc, :thought_signature) || Map.get(tc, "thought_signature") do
+      nil -> %{}
+      sig -> %{thought_signature: sig}
+    end
+  end
 
   # ============================================================================
   # Content Building

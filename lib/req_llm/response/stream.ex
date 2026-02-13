@@ -87,6 +87,12 @@ defmodule ReqLLM.Response.Stream do
       index: Map.get(chunk.metadata, :index, 0)
     }
 
+    tool_call =
+      case Map.get(chunk.metadata, :thought_signature) do
+        nil -> tool_call
+        sig -> Map.put(tool_call, :thought_signature, sig)
+      end
+
     %{acc | tool_calls: [tool_call | acc.tool_calls]}
   end
 

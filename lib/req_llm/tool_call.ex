@@ -39,7 +39,8 @@ defmodule ReqLLM.ToolCall do
   @schema Zoi.struct(__MODULE__, %{
             id: Zoi.string(),
             type: Zoi.string() |> Zoi.default("function"),
-            function: Zoi.map()
+            function: Zoi.map(),
+            provider_meta: Zoi.map() |> Zoi.default(%{})
           })
 
   @type t :: unquote(Zoi.type_spec(@schema))
@@ -64,15 +65,16 @@ defmodule ReqLLM.ToolCall do
       ToolCall.new("call_123", "get_weather", ~s({"location":"SF"}))
       ToolCall.new(nil, "get_time", "{}")
   """
-  @spec new(String.t() | nil, String.t(), String.t()) :: t()
-  def new(id, name, arguments_json) do
+  @spec new(String.t() | nil, String.t(), String.t(), map()) :: t()
+  def new(id, name, arguments_json, provider_meta \\ %{}) do
     %__MODULE__{
       id: id || generate_id(),
       type: "function",
       function: %{
         name: name,
         arguments: arguments_json
-      }
+      },
+      provider_meta: provider_meta
     }
   end
 
@@ -186,18 +188,23 @@ defmodule ReqLLM.ToolCall do
   end
 
   defimpl Jason.Encoder do
-    def encode(%{id: id, type: type, function: function}, opts) do
-      Jason.Encode.map(
-        %{
-          "id" => id,
-          "type" => type,
-          "function" => %{
-            "name" => function.name,
-            "arguments" => function.arguments
-          }
-        },
-        opts
-      )
+    def encode(%{id: id, type: type, function: function, provider_meta: provider_meta}, opts) do
+      base = %{
+        "id" => id,
+        "type" => type,
+        "function" => %{
+          "name" => function.name,
+          "arguments" => function.arguments
+        }
+      }
+
+      map =
+        case provider_meta do
+          meta when meta == %{} -> base
+          meta -> Map.put(base, "provider_meta", meta)
+        end
+
+      Jason.Encode.map(map, opts)
     end
   end
 

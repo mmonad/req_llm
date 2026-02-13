@@ -949,10 +949,21 @@ defmodule ReqLLM.Provider.Defaults do
          "id" => id,
          "type" => "function",
          "function" => %{"name" => name, "arguments" => args_json}
-       }) do
+       } = tc_map) do
     case Jason.decode(args_json || "{}") do
-      {:ok, args} -> ReqLLM.StreamChunk.tool_call(name, args, %{id: id})
-      {:error, _} -> nil
+      {:ok, args} ->
+        meta = %{id: id}
+
+        meta =
+          case tc_map["thought_signature"] do
+            nil -> meta
+            sig -> Map.put(meta, :thought_signature, sig)
+          end
+
+        ReqLLM.StreamChunk.tool_call(name, args, meta)
+
+      {:error, _} ->
+        nil
     end
   end
 
@@ -1103,7 +1114,14 @@ defmodule ReqLLM.Provider.Defaults do
        }) do
     args_json = if is_binary(args), do: args, else: Jason.encode!(args)
     id = Map.get(meta, :id)
-    ReqLLM.ToolCall.new(id, name, args_json)
+
+    provider_meta =
+      case Map.get(meta, :thought_signature) do
+        nil -> %{}
+        sig -> %{thought_signature: sig}
+      end
+
+    ReqLLM.ToolCall.new(id, name, args_json, provider_meta)
   end
 
   defp openai_chunk_to_tool_call(_), do: nil
