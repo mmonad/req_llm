@@ -220,8 +220,14 @@ defmodule ReqLLM.Provider.Defaults do
       :embedding ->
         prepare_embedding_request(provider_mod, model_spec, input, opts)
 
+      :transcription ->
+        prepare_transcription_request(provider_mod, model_spec, input, opts)
+
+      :speech ->
+        prepare_speech_request(provider_mod, model_spec, input, opts)
+
       _ ->
-        supported_operations = [:chat, :object, :embedding]
+        supported_operations = [:chat, :object, :embedding, :transcription, :speech]
 
         {:error,
          ReqLLM.Error.Invalid.Parameter.exception(
@@ -354,6 +360,157 @@ defmodule ReqLLM.Provider.Defaults do
   end
 
   @doc """
+  Prepares a transcription (speech-to-text) request.
+
+  Sends audio data as multipart/form-data to the provider's transcription endpoint.
+  The audio is sent as a file part along with the model name and any provider options.
+  """
+  @spec prepare_transcription_request(module(), term(), binary(), keyword()) ::
+          {:ok, Req.Request.t()} | {:error, Exception.t()}
+  def prepare_transcription_request(provider_mod, model_spec, audio_data, opts) do
+    with {:ok, model} <- ReqLLM.model(model_spec) do
+      http_opts = Keyword.get(opts, :req_http_options, [])
+      media_type = Keyword.get(opts, :media_type, "audio/mpeg")
+      language = Keyword.get(opts, :language)
+      provider_options = Keyword.get(opts, :provider_options, [])
+      timeout = Keyword.get(opts, :receive_timeout, 120_000)
+
+      ext = media_type_to_extension(media_type)
+      filename = "audio.#{ext}"
+
+      # Build multipart form fields using Req's form_multipart format:
+      # field_name: value or field_name: {value, filename: ..., content_type: ...}
+      form_parts =
+        [
+          file: {audio_data, filename: filename, content_type: media_type},
+          model: model.id,
+          response_format: "verbose_json"
+        ]
+        |> maybe_add_part(:language, language)
+        |> maybe_add_provider_parts(provider_options)
+
+      api_key = ReqLLM.Keys.get!(model, opts)
+
+      request =
+        Req.new(
+          [
+            url: "/audio/transcriptions",
+            method: :post,
+            base_url: Keyword.get(opts, :base_url, provider_mod.default_base_url()),
+            receive_timeout: timeout,
+            pool_timeout: timeout,
+            form_multipart: form_parts,
+            auth: {:bearer, api_key}
+          ] ++ http_opts
+        )
+        |> Req.Request.put_header("authorization", "Bearer #{api_key}")
+        |> ReqLLM.Step.Retry.attach()
+        |> ReqLLM.Step.Error.attach()
+        |> ReqLLM.Step.Fixture.maybe_attach(model, opts)
+
+      {:ok, request}
+    end
+  end
+
+  @doc """
+  Maps an audio media type to a file extension.
+  """
+  @spec media_type_to_extension(String.t()) :: String.t()
+  def media_type_to_extension("audio/mpeg"), do: "mp3"
+  def media_type_to_extension("audio/mp4"), do: "mp4"
+  def media_type_to_extension("audio/wav"), do: "wav"
+  def media_type_to_extension("audio/webm"), do: "webm"
+  def media_type_to_extension("audio/ogg"), do: "ogg"
+  def media_type_to_extension("audio/flac"), do: "flac"
+  def media_type_to_extension("audio/opus"), do: "opus"
+  def media_type_to_extension(_), do: "mp3"
+
+  defp maybe_add_part(parts, _key, nil), do: parts
+  defp maybe_add_part(parts, key, value), do: parts ++ [{key, to_string(value)}]
+
+  defp maybe_add_provider_parts(parts, opts) when is_list(opts) do
+    Enum.reduce(opts, parts, fn {key, value}, acc ->
+      case value do
+        nil -> acc
+        val -> acc ++ [{key, to_string(val)}]
+      end
+    end)
+  end
+
+  defp maybe_add_provider_parts(parts, opts) when is_map(opts) do
+    maybe_add_provider_parts(parts, Map.to_list(opts))
+  end
+
+  defp maybe_add_provider_parts(parts, _), do: parts
+
+  @doc """
+  Prepares a text-to-speech request.
+
+  Sends a JSON POST to the provider's speech endpoint. The response is raw audio
+  binary, so this bypasses the standard decode_response pipeline.
+  """
+  @spec prepare_speech_request(module(), term(), String.t(), keyword()) ::
+          {:ok, Req.Request.t()} | {:error, Exception.t()}
+  def prepare_speech_request(provider_mod, model_spec, text, opts) do
+    with {:ok, model} <- ReqLLM.model(model_spec) do
+      http_opts = Keyword.get(opts, :req_http_options, [])
+      voice = Keyword.get(opts, :voice, "alloy")
+      speed = Keyword.get(opts, :speed)
+      output_format = Keyword.get(opts, :output_format, :mp3)
+      provider_options = Keyword.get(opts, :provider_options, [])
+      timeout = Keyword.get(opts, :receive_timeout, 120_000)
+
+      body =
+        %{
+          model: model.id,
+          input: text,
+          voice: voice,
+          response_format: to_string(output_format)
+        }
+        |> maybe_put(:speed, speed)
+        |> maybe_put_speech_provider_options(provider_options)
+
+      api_key = ReqLLM.Keys.get!(model, opts)
+
+      request =
+        Req.new(
+          [
+            url: "/audio/speech",
+            method: :post,
+            base_url: Keyword.get(opts, :base_url, provider_mod.default_base_url()),
+            receive_timeout: timeout,
+            pool_timeout: timeout,
+            body: Jason.encode!(body),
+            auth: {:bearer, api_key},
+            # Disable Req's automatic JSON decoding — response is raw audio binary
+            decode_body: false
+          ] ++ http_opts
+        )
+        |> Req.Request.put_header("content-type", "application/json")
+        |> Req.Request.put_header("authorization", "Bearer #{api_key}")
+        |> ReqLLM.Step.Retry.attach()
+        |> ReqLLM.Step.Error.attach()
+        |> ReqLLM.Step.Fixture.maybe_attach(model, opts)
+
+      {:ok, request}
+    end
+  end
+
+  defp maybe_put_speech_provider_options(body, opts) when is_list(opts) do
+    Enum.reduce(opts, body, fn
+      {_key, nil}, acc -> acc
+      {:instructions, value}, acc -> Map.put(acc, :instructions, value)
+      {key, value}, acc -> Map.put(acc, key, value)
+    end)
+  end
+
+  defp maybe_put_speech_provider_options(body, opts) when is_map(opts) do
+    maybe_put_speech_provider_options(body, Map.to_list(opts))
+  end
+
+  defp maybe_put_speech_provider_options(body, _), do: body
+
+  @doc """
   Filters out internal ReqLLM keys that should not be passed to Req.
 
   These keys are used by ReqLLM for internal processing but are not valid Req options.
@@ -406,44 +563,50 @@ defmodule ReqLLM.Provider.Defaults do
   end
 
   @doc """
-  Fetches API key and extra common option keys
+  Fetches API key and extra common option keys.
   """
   @spec fetch_api_key_and_extra_options(module(), LLMDB.Model.t(), keyword()) ::
           {binary(), [atom()]}
   def fetch_api_key_and_extra_options(provider_mod, model, user_opts) do
     api_key = ReqLLM.Keys.get!(model, user_opts)
+    {api_key, extra_option_keys(provider_mod)}
+  end
 
-    # Register options that might be passed by users but aren't standard Req options
-    extra_option_keys =
-      [
-        :model,
-        :compiled_schema,
-        :temperature,
-        :max_tokens,
-        :app_referer,
-        :app_title,
-        :fixture,
-        :api_key,
-        :on_unsupported,
-        :n,
-        :tools,
-        :tool_choice,
-        :req_http_options,
-        :stream,
-        :frequency_penalty,
-        :system_prompt,
-        :top_p,
-        :presence_penalty,
-        :seed,
-        :stop,
-        :user,
-        :reasoning_effort,
-        :reasoning_token_budget,
-        :dimensions,
-        :encoding_format
-      ] ++ provider_mod.supported_provider_options()
-
-    {api_key, extra_option_keys}
+  @doc """
+  Returns extra option keys that should be registered on Req requests.
+  """
+  @spec extra_option_keys(module()) :: [atom()]
+  def extra_option_keys(provider_mod) do
+    [
+      :model,
+      :compiled_schema,
+      :temperature,
+      :max_tokens,
+      :app_referer,
+      :app_title,
+      :fixture,
+      :api_key,
+      :access_token,
+      :auth_mode,
+      :provider_options,
+      :on_unsupported,
+      :n,
+      :tools,
+      :tool_choice,
+      :req_http_options,
+      :stream,
+      :frequency_penalty,
+      :system_prompt,
+      :top_p,
+      :presence_penalty,
+      :seed,
+      :stop,
+      :user,
+      :reasoning_effort,
+      :reasoning_token_budget,
+      :dimensions,
+      :encoding_format
+    ] ++ provider_mod.supported_provider_options()
   end
 
   @doc """

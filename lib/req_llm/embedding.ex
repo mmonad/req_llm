@@ -97,25 +97,15 @@ defmodule ReqLLM.Embedding do
       #=> {:error, :embedding_not_supported}
 
   """
-  @spec validate_model(String.t() | {atom(), keyword()} | struct()) ::
+  @spec validate_model(ReqLLM.model_input()) ::
           {:ok, Model.t()} | {:error, term()}
   def validate_model(model_spec) do
-    with {:ok, model} <- ReqLLM.model(model_spec) do
+    with {:ok, model} <- ReqLLM.model(model_spec),
+         {:ok, _provider_module} <- ReqLLM.provider(model.provider) do
       model_string = LLMDB.Model.spec(model)
 
-      embedding_models = get_embedding_models()
-
-      if model_string in embedding_models do
-        case ReqLLM.provider(model.provider) do
-          {:ok, _provider_module} ->
-            {:ok, model}
-
-          {:error, _} ->
-            {:error,
-             ReqLLM.Error.Invalid.Parameter.exception(
-               parameter: "model: #{model_string} provider not found"
-             )}
-        end
+      if embedding_capable_model?(model) do
+        {:ok, model}
       else
         {:error,
          ReqLLM.Error.Invalid.Parameter.exception(
@@ -124,6 +114,31 @@ defmodule ReqLLM.Embedding do
       end
     end
   end
+
+  # Fallback detection for embedding models when LLMDB capabilities metadata is missing/null.
+  defp embedding_model_id?(model_id) when is_binary(model_id) do
+    String.contains?(model_id, "embedding")
+  end
+
+  defp embedding_capable_model?(%Model{} = model) do
+    model_string = LLMDB.Model.spec(model)
+    capabilities = model.capabilities || %{}
+
+    model_string in get_embedding_models() or
+      embeddings_enabled?(capabilities) or
+      embedding_model_id?(model.provider_model_id || model.id)
+  end
+
+  defp embeddings_enabled?(capabilities) when is_map(capabilities) do
+    case capabilities[:embeddings] || capabilities["embeddings"] do
+      true -> true
+      %{enabled: true} -> true
+      %{"enabled" => true} -> true
+      _ -> false
+    end
+  end
+
+  defp embeddings_enabled?(_), do: false
 
   @doc """
   Returns the base embedding options schema.
@@ -176,7 +191,7 @@ defmodule ReqLLM.Embedding do
 
   """
   @spec embed(
-          String.t() | {atom(), keyword()} | struct(),
+          ReqLLM.model_input(),
           String.t() | [String.t()],
           keyword()
         ) :: {:ok, [float()] | [[float()]] | map()} | {:error, term()}
@@ -188,7 +203,8 @@ defmodule ReqLLM.Embedding do
     with {:ok, model} <- validate_model(model_spec),
          :ok <- validate_input(text),
          {:ok, provider_module} <- ReqLLM.provider(model.provider),
-         {:ok, request} <- provider_module.prepare_request(:embedding, model, text, provider_opts),
+         {:ok, request} <-
+           provider_module.prepare_request(:embedding, model, text, provider_opts),
          {:ok, %Req.Response{status: status} = response} when status in 200..299 <-
            Req.request(request),
          {:ok, embedding} <- extract_single_embedding(response.body) do
